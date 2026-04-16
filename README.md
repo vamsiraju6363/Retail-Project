@@ -1,83 +1,111 @@
-# Retail Analytics ETL Pipeline (AWS + PySpark)  
-**Production-ready serverless pipeline for retail data**  
-  
-This repository contains the end-to-end implementation of a retail data analytics ETL pipeline built using AWS serverless services (S3, Lambda, Glue, Athena, QuickSight). The source dataset is the “Global Superstore” retail data from Kaggle, covering customer orders, product categories, sales & profits.  
+# Retail Analytics ETL on AWS
 
-Using a layered architecture (Bronze→Silver→Gold), we develop locally with PySpark and then deploy to AWS: raw CSV files in S3 trigger Lambda → Glue ETL → processed data in S3 → queried via Athena → visualised with QuickSight.  
-  
----
+A serverless data pipeline that takes raw retail CSVs and turns them into analytics-ready dashboards without anyone touching a button. Drop a file in S3 → Lambda wakes up → Glue transforms it → Athena queries it → QuickSight shows it. That's the whole flow.
 
-## Project Goals  
-- Demonstrate how to take a real-world business dataset and build a **scalable**, **automated**, **cloud-native** data engineering pipeline.  
-- Build logic locally (VS Code, PySpark) for cleaning, transforming and aggregating monthly revenue summaries to validate before cloud deployment.  
-- Implement a fully serverless workflow: **any new file upload** triggers the pipeline end-to-end without manual steps.  
-- Produce analytics-ready data layers (Silver, Gold) and deliver visualization KPIs/trends to business stakeholders.  
+Source data: the [Global Superstore](https://www.kaggle.com/datasets/apoorvaappz/global-super-store-dataset) dataset from Kaggle — orders, products, categories, sales, profits.
 
----
-
-## Architecture Overview  
-
-| Stage | Description |
-|-------|-------------|
-| **Local Development** | Use Python + PySpark scripts in VS Code: read raw CSVs → clean & dedupe → aggregate → output Parquet summaries. |
-| **AWS Ingestion & Automation** | Raw CSV files uploaded to S3 “raw” bucket trigger an S3 event. That event invokes a Lambda function which starts a Glue ETL job. |
-| **Data Lake Layers** | Within AWS: Bronze = raw CSV in S3; Silver = cleaned Parquet in S3; Gold = aggregated monthly revenue summaries in S3. |
-| **Query & Visualisation** | Use Athena to query the Gold layer in S3; connect to QuickSight to build dashboards showing KPIs (total sales, profit margin, region/category breakdowns, trend over time). |
-| **Serverless Automation** | No servers to manage — S3, Lambda, Glue, Athena and QuickSight all managed services; new data triggers the full workflow automatically. |
+<p>
+  <img alt="AWS" src="https://img.shields.io/badge/AWS-serverless-232F3E?logo=amazonaws&logoColor=white&style=flat-square">
+  <img alt="PySpark" src="https://img.shields.io/badge/PySpark-3.5-E25A1C?logo=apachespark&logoColor=white&style=flat-square">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white&style=flat-square">
+  <img alt="Parquet" src="https://img.shields.io/badge/Parquet-columnar-50B8E7?style=flat-square">
+  <img alt="License" src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
+</p>
 
 ---
 
-## Tech Stack  
-- Local: Python, PySpark, VS Code  
-- Cloud: AWS S3, AWS Lambda, AWS Glue (PySpark job), AWS Athena, Amazon QuickSight  
-- Storage format: Parquet for intermediate/processed layers  
-- Data source: Kaggle “Global Superstore” retail dataset  
+## Architecture
 
----
+```
+┌──────────┐     S3 event     ┌──────────┐     starts     ┌───────────────┐
+│   S3     │ ───────────────▶ │ Lambda   │ ─────────────▶ │ Glue (PySpark)│
+│  (raw)   │                  └──────────┘                │    ETL job    │
+└──────────┘                                              └──────┬────────┘
+                                                                 │
+                    Bronze → Silver → Gold                       │
+                                                                 ▼
+                                                        ┌─────────────────┐
+                                                        │    S3 (gold)    │
+                                                        └───────┬─────────┘
+                                                                │
+                                                                ▼
+                                                        ┌─────────────────┐
+                                                        │ Athena → QuickSight │
+                                                        └─────────────────┘
+```
 
-## Setup & Usage  
+### Layered data lake
 
-### Local Development  
+| Layer | What lives here | Format |
+|---|---|---|
+| **Bronze** | Raw CSV exactly as uploaded. No schema applied yet. | CSV |
+| **Silver** | Cleaned, deduped, typed. One row per order line. | Parquet |
+| **Gold** | Business-ready aggregates: monthly revenue, profit margin, region splits. | Parquet |
+
+## Why this design
+
+- **Serverless end to end.** No clusters to babysit. The pipeline scales with data, not with headcount.
+- **Idempotent.** Re-running a file produces the same gold output. Safe for backfills.
+- **Cheap at rest.** Parquet + Athena means you pay per query, not per instance.
+- **Observable.** Every Glue run logs row counts, timing, and job name so you can debug from CloudWatch.
+
+## What's in this repo
+
+```
+AWS_Glue_Spark.py         Glue PySpark job: raw → silver → gold
+test_spark.py             local test harness that mirrors the Glue logic
+data/                     sample CSVs and intermediate outputs
+notebooks/                exploration and validation notebooks
+scripts/                  small utilities (bucket setup, uploads)
+Images/                   architecture + dashboard screenshots
+```
+
+## Running it
+
+### Locally (development loop)
+
 ```bash
-# Clone the repo
-git clone https://github.com/<your-username>/retail-analytics-etl-aws.git
-cd retail-analytics-etl-aws
+git clone https://github.com/vamsiraju6363/Retail-Project.git
+cd Retail-Project
 
-# Create a virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-# Run local ETL layers
-python src/etl_raw_spark.py       # loads raw CSV to bronze format
-python src/etl_clean_spark.py     # cleans & dedupes → silver
-python src/etl_aggregate_spark.py # computes monthly revenue summaries → gold
+# Run the pipeline against the sample CSVs
+python test_spark.py
+```
 
-AWS Deployment
+### On AWS (production)
 
-- Create three S3 buckets (or prefix folders) for: raw, clean/silver, gold data.
-- Configure an S3 bucket event notification: when a new CSV lands in the raw zone, invoke the Lambda function.
-- Lambda function logic: pass file path to Glue job.
-- Create a Glue job (PySpark) with script glue_etl_job.py.
-- Job reads raw files → transforms → writes silver & gold layers to respective S3 zones.
-- Logs run metadata (job name, start/finish time, row counts) for auditing.
-- Define Athena database/tables pointing to S3 gold layer.
-- In QuickSight, connect to the Athena tables and build dashboards:
-- KPI: Total Sales, Total Profit, Profit Margin
-- Trend: Monthly revenue over time, by region, by product category
-- Breakdown: Sales by region, category share, top customers
+1. Create three S3 prefixes (or buckets): `raw/`, `silver/`, `gold/`.
+2. Upload `AWS_Glue_Spark.py` as a **Glue job** with a Python 3 / Spark 3 worker type.
+3. Create a **Lambda** that starts the Glue job, triggered by S3 `ObjectCreated` events on `raw/`.
+4. Register the gold prefix as an **Athena** table.
+5. Connect **QuickSight** to Athena and build the dashboards.
 
-Results & Business Impact
-Automates ingestion of retail CSVs and transforms them into analytics-ready monthly summaries.
-Reduces manual effort: once set up, new data triggers the full workflow automatically.
-Enables near-real-time business visibility into sales trends, profit margins, region/category performance.
-Demonstrates architecture for scaling: as data volume grows, Parquet + serverless services scale effectively without infrastructure overhead.
+Detailed steps (including IAM) are in `reports/deployment.md`.
 
-Future Enhancements
-Add streaming ingestion via Apache Kafka (or AWS Kinesis) for real-time/near-real-time data flows.
-Introduce orchestration/scheduling via Apache Airflow or AWS Step Functions to manage dependencies, retries, and monitoring.
-Infrastructure as Code: define AWS resources using Terraform for repeatable, versioned deployments.
-Add data quality checks/monitoring (row counts, null rates, schema drift) and alerting (via CloudWatch/SNS).
-Expand datasets and analytics: e.g., customer lifetime value (CLV), churn analysis, forecasting using ML.
+## Dashboards
+
+The QuickSight analysis covers:
+
+- Total sales and profit (MTD, YTD)
+- Profit margin trend by region
+- Category share of revenue
+- Top N customers by lifetime value
+- Monthly revenue time series with YoY overlay
+
+## What I'd add next
+
+- **Streaming ingestion** via Kinesis for near-real-time dashboards.
+- **Airflow or Step Functions** for orchestration across multiple source feeds.
+- **dbt on Athena** to manage the gold-layer transformations as code.
+- **Data quality checks** (Great Expectations) on the silver layer.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+Built by [Vamshi](https://www.linkedin.com/in/vamsi-raju/).
